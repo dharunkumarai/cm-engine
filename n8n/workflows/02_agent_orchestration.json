@@ -1,0 +1,237 @@
+{
+  "name": "02 - Valeon Agent Orchestration & Compliance Gate",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "orchestrate-deal",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-orch",
+      "name": "Webhook Trigger Orchestration",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "valeon-agent-orchestrate"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.*, co.name AS company_name, co.sector AS company_sector, co.hq_country,\n       ct.first_name, ct.last_name, ct.email, ct.phone, ct.title\nFROM deals d\nLEFT JOIN companies co ON co.id = d.company_id\nLEFT JOIN contacts  ct ON ct.id = d.primary_contact_id\nWHERE d.id = $1;"
+      },
+      "id": "node-get-deal",
+      "name": "Fetch Deal Details",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://agents:3002/qualify",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"deal\": {{ JSON.stringify($json) }}\n}",
+        "options": {}
+      },
+      "id": "node-agent-a",
+      "name": "Agent A: Deal Qualifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://agents:3002/compliance-review",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"deal\": {{ JSON.stringify($('Fetch Deal Details').item.json) }}\n}",
+        "options": {}
+      },
+      "id": "node-agent-b",
+      "name": "Agent B: Compliance Reviewer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "gate-pass-check",
+              "leftValue": "={{ $json.result }}",
+              "rightValue": "pass",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-gate",
+      "name": "Compliance Gate (Pass/Fail)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mock-crm:3001/api/deals",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"deal_id\": \"{{ $('Fetch Deal Details').item.json.id }}\",\n  \"name\": \"{{ $('Fetch Deal Details').item.json.name }}\",\n  \"company\": \"{{ $('Fetch Deal Details').item.json.company_name }}\",\n  \"deal_size_usd\": {{ $('Fetch Deal Details').item.json.deal_size_usd }},\n  \"sector\": \"{{ $('Fetch Deal Details').item.json.sector }}\",\n  \"qualification_score\": {{ $('Agent A: Deal Qualifier').item.json.score }},\n  \"compliance_status\": \"passed\"\n}",
+        "options": {}
+      },
+      "id": "node-crm-push",
+      "name": "Push to Mock MadeMarket CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1360, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sync_log (deal_id, target_system, http_status, request_payload, response_payload, success)\nVALUES ($1, 'mademarket_mock', 201, $2, $3, TRUE);\n\nUPDATE deals SET status = 'synced', external_crm_id = $4, updated_at = NOW() WHERE id = $1;"
+      },
+      "id": "node-log-sync-success",
+      "name": "Log Sync & Update Deal",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1580, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"completed\",\n  \"gate\": \"PASSED\",\n  \"crm_synced\": true,\n  \"crm_response\": {{ JSON.stringify($('Push to Mock MadeMarket CRM').item.json) }}\n}",
+        "options": {}
+      },
+      "id": "node-resp-pass",
+      "name": "Response Passed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1800, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"blocked\",\n  \"gate\": \"REJECTED\",\n  \"reasoning\": \"{{ $json.reasoning }}\",\n  \"issues\": {{ JSON.stringify($json.issues) }}\n}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "node-resp-fail",
+      "name": "Response Rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1360, 420]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger Orchestration": {
+      "main": [
+        [
+          {
+            "node": "Fetch Deal Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Deal Details": {
+      "main": [
+        [
+          {
+            "node": "Agent A: Deal Qualifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent A: Deal Qualifier": {
+      "main": [
+        [
+          {
+            "node": "Agent B: Compliance Reviewer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent B: Compliance Reviewer": {
+      "main": [
+        [
+          {
+            "node": "Compliance Gate (Pass/Fail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compliance Gate (Pass/Fail)": {
+      "main": [
+        [
+          {
+            "node": "Push to Mock MadeMarket CRM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push to Mock MadeMarket CRM": {
+      "main": [
+        [
+          {
+            "node": "Log Sync & Update Deal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Sync & Update Deal": {
+      "main": [
+        [
+          {
+            "node": "Response Passed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "valeon",
+    "phase1",
+    "orchestration",
+    "compliance"
+  ]
+}

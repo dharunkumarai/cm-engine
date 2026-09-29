@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  # ── PostgreSQL Database ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: valeon-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: valeon_dev
+      POSTGRES_DB: valeon
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d valeon"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Mock MadeMarket CRM Service ──────────────────────────────────────────
+  mock-crm:
+    build:
+      context: ./mock-crm
+      dockerfile: Dockerfile
+    container_name: valeon-mock-crm
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── AI Agents Service (Claude Sonnet / Deterministic Mock) ───────────────
+  agents:
+    build:
+      context: ./agents
+      dockerfile: Dockerfile
+    container_name: valeon-agents
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - DATABASE_URL=postgresql://postgres:valeon_dev@postgres:5432/valeon
+      - CRM_URL=http://mock-crm:3001
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - MOCK_CLAUDE=${MOCK_CLAUDE:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-crm:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── n8n Orchestration Engine ────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: valeon-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=valeon
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=valeon_dev
+      - DB_POSTGRESDB_SCHEMA=n8n_system
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/data/workflows:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Demo Dashboard (React + Vite) ────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: valeon-dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      agents:
+        condition: service_started
+
+volumes:
+  pgdata:
+  n8n_data:

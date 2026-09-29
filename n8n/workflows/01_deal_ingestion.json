@@ -1,0 +1,124 @@
+{
+  "name": "01 - Valeon Deal Ingestion",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingest-deal",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-in",
+      "name": "Webhook Ingest Deal",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "valeon-deal-ingest"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and normalize incoming deal payload\nconst body = $input.first().json.body || $input.first().json;\n\nif (!body.name) {\n  throw new Error('Missing required field: name');\n}\n\nreturn [{\n  json: {\n    company_name: body.company_name || body.name + ' Corp',\n    company_sector: body.sector || 'Technology',\n    company_country: body.country || 'US',\n    contact_first: body.contact_first || 'Primary',\n    contact_last: body.contact_last || 'Contact',\n    contact_email: body.contact_email || null,\n    contact_phone: body.contact_phone || null,\n    deal_name: body.name,\n    deal_type: body.deal_type || 'M&A',\n    sector: body.sector || 'Technology',\n    deal_size_usd: Number(body.deal_size_usd) || 50000000,\n    description: body.description || 'Imported via n8n ingestion workflow',\n    raw_payload: body\n  }\n}];"
+      },
+      "id": "node-normalize",
+      "name": "Normalize Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH new_company AS (\n  INSERT INTO companies (name, sector, hq_country)\n  VALUES ($1, $2, $3)\n  RETURNING id\n),\nnew_contact AS (\n  INSERT INTO contacts (company_id, first_name, last_name, email, phone, is_primary)\n  VALUES ((SELECT id FROM new_company), $4, $5, $6, $7, TRUE)\n  RETURNING id\n)\nINSERT INTO deals (name, company_id, primary_contact_id, deal_type, sector, deal_size_usd, description, status, source, raw_payload)\nVALUES ($8, (SELECT id FROM new_company), (SELECT id FROM new_contact), $9, $10, $11, $12, 'ingested', 'webhook', $13)\nRETURNING id, name, status, deal_size_usd, created_at;"
+      },
+      "id": "node-db-insert",
+      "name": "Insert Deal to Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://agents:3002/qualify",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"deal\": {\n    \"id\": \"{{ $json.id }}\",\n    \"name\": \"{{ $json.name }}\",\n    \"deal_size_usd\": {{ $json.deal_size_usd }},\n    \"sector\": \"{{ $('Normalize Payload').item.json.sector }}\",\n    \"deal_type\": \"{{ $('Normalize Payload').item.json.deal_type }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "node-trigger-agents",
+      "name": "Trigger Agent A (Qualify)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"success\",\n  \"deal_id\": \"{{ $('Insert Deal to Postgres').item.json.id }}\",\n  \"message\": \"Deal ingested and passed to AI qualification pipeline\",\n  \"agent_result\": {{ JSON.stringify($json) }}\n}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "id": "node-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Ingest Deal": {
+      "main": [
+        [
+          {
+            "node": "Normalize Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Payload": {
+      "main": [
+        [
+          {
+            "node": "Insert Deal to Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Deal to Postgres": {
+      "main": [
+        [
+          {
+            "node": "Trigger Agent A (Qualify)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Agent A (Qualify)": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "valeon",
+    "phase1",
+    "ingestion"
+  ]
+}

@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-valeon-navy text-gray-100 font-sans antialiased;
+    min-height: 100vh;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-valeon-surface;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-valeon-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-valeon-muted;
+  }
+}
+
+@layer components {
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+  .panel {
+    @apply bg-valeon-panel border border-valeon-border rounded-xl p-4;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors;
+  }
+}

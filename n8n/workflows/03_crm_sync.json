@@ -1,0 +1,126 @@
+{
+  "name": "03 - Valeon CRM Sync (MadeMarket Mock)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sync-deal",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-sync",
+      "name": "Webhook Trigger CRM Sync",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "valeon-crm-sync"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT d.*, co.name AS company_name, co.sector AS company_sector, co.hq_country,\n       ct.first_name, ct.last_name, ct.email, ct.phone\nFROM deals d\nLEFT JOIN companies co ON co.id = d.company_id\nLEFT JOIN contacts  ct ON ct.id = d.primary_contact_id\nWHERE d.id = $1 AND d.status = 'passed';"
+      },
+      "id": "node-verify-passed",
+      "name": "Verify Deal Passed Compliance",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mock-crm:3001/api/deals",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"deal_id\": \"{{ $json.id }}\",\n  \"name\": \"{{ $json.name }}\",\n  \"company\": \"{{ $json.company_name }}\",\n  \"deal_size_usd\": {{ $json.deal_size_usd }},\n  \"sector\": \"{{ $json.sector }}\",\n  \"deal_type\": \"{{ $json.deal_type }}\",\n  \"qualification_score\": {{ $json.qualification_score }},\n  \"compliance_status\": \"passed\",\n  \"primary_contact\": {\n    \"name\": \"{{ $json.first_name }} {{ $json.last_name }}\",\n    \"email\": \"{{ $json.email }}\",\n    \"phone\": \"{{ $json.phone }}\"\n  }\n}",
+        "options": {}
+      },
+      "id": "node-post-crm",
+      "name": "Post to MadeMarket Endpoint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sync_log (deal_id, target_system, http_status, request_payload, response_payload, success)\nVALUES (\n  $1,\n  'mademarket_mock',\n  201,\n  $2,\n  $3,\n  TRUE\n);\n\nUPDATE deals\nSET status = 'synced', external_crm_id = $4, updated_at = NOW()\nWHERE id = $1\nRETURNING id, name, status, external_crm_id;"
+      },
+      "id": "node-record-sync",
+      "name": "Record Sync in Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"success\",\n  \"synced\": true,\n  \"deal_id\": \"{{ $('Verify Deal Passed Compliance').item.json.id }}\",\n  \"crm_id\": \"{{ $('Post to MadeMarket Endpoint').item.json.id }}\",\n  \"timestamp\": \"{{ $('Post to MadeMarket Endpoint').item.json.timestamp }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-sync-response",
+      "name": "Sync Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger CRM Sync": {
+      "main": [
+        [
+          {
+            "node": "Verify Deal Passed Compliance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Deal Passed Compliance": {
+      "main": [
+        [
+          {
+            "node": "Post to MadeMarket Endpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to MadeMarket Endpoint": {
+      "main": [
+        [
+          {
+            "node": "Record Sync in Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Sync in Database": {
+      "main": [
+        [
+          {
+            "node": "Sync Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    "valeon",
+    "phase1",
+    "crm",
+    "sync"
+  ]
+}
